@@ -22,13 +22,6 @@
 
 #include <malloc.h>
 
-// these are only defined when WINVER >= 0x0500
-#if !defined(SPI_GETMOUSESPEED)
-#define SPI_GETMOUSESPEED 112
-#endif
-#if !defined(SPI_SETMOUSESPEED)
-#define SPI_SETMOUSESPEED 113
-#endif
 #if !defined(SPI_GETSCREENSAVERRUNNING)
 #define SPI_GETSCREENSAVERRUNNING 114
 #endif
@@ -100,6 +93,73 @@ static void send_mouse_input(DWORD dwFlags, DWORD dx, DWORD dy, DWORD dwData)
   inp.mi.dwExtraInfo = 0;
   SendInput(1, &inp, sizeof(inp));
 }
+
+#if defined(_WIN32)
+namespace {
+
+typedef void *InterceptionContext;
+typedef int InterceptionDevice;
+
+struct InterceptionMouseStroke
+{
+  unsigned short state;
+  unsigned short flags;
+  short rolling;
+  int x;
+  int y;
+  unsigned int information;
+};
+
+union InterceptionStroke
+{
+  InterceptionMouseStroke mouse;
+};
+
+using CreateContextFn = InterceptionContext(__stdcall *)();
+using SendFn = int(__stdcall *)(InterceptionContext, InterceptionDevice, const InterceptionStroke *, unsigned int);
+
+CreateContextFn g_createContext = nullptr;
+SendFn g_send = nullptr;
+InterceptionContext g_context = nullptr;
+
+constexpr unsigned short kMoveRelative = 0x0000;
+constexpr int kPrimaryMouse = 11; // INTERCEPTION_MOUSE(0)
+
+void initInterception()
+{
+  if (g_createContext != nullptr) {
+    return;
+  }
+
+  if (HMODULE lib = LoadLibraryW(L"interception.dll")) {
+    g_createContext = reinterpret_cast<CreateContextFn>(GetProcAddress(lib, "interception_create_context"));
+    g_send = reinterpret_cast<SendFn>(GetProcAddress(lib, "interception_send"));
+    if (g_createContext != nullptr) {
+      g_context = g_createContext();
+    }
+  }
+}
+
+void sendMouseRelativeInterception(int dx, int dy)
+{
+  // Try to forward the relative move through the Interception driver. If the
+  // driver isn't available or initialization fails, fall back to the standard
+  // SendInput path so mouse movement still works.
+  initInterception();
+  if (g_context != nullptr && g_send != nullptr) {
+    InterceptionMouseStroke stroke{};
+    stroke.x = dx;
+    stroke.y = dy;
+    stroke.flags = kMoveRelative;
+    g_send(g_context, kPrimaryMouse, reinterpret_cast<InterceptionStroke *>(&stroke), 1);
+    return;
+  }
+
+  send_mouse_input(MOUSEEVENTF_MOVE, dx, dy, 0);
+}
+
+} // namespace
+#endif
 
 //
 // MSWindowsDesks
@@ -421,35 +481,11 @@ void MSWindowsDesks::deskMouseMove(int32_t x, int32_t y) const
 
 void MSWindowsDesks::deskMouseRelativeMove(int32_t dx, int32_t dy) const
 {
-  // relative moves are subject to cursor acceleration which we don't
-  // want.so we disable acceleration, do the relative move, then
-  // restore acceleration.  there's a slight chance we'll end up in
-  // the wrong place if the user moves the cursor using this system's
-  // mouse while simultaneously moving the mouse on the server
-  // system.  that defeats the purpose of deskflow so we'll assume
-  // that won't happen.  even if it does, the next mouse move will
-  // correct the position.
-
-  // save mouse speed & acceleration
-  int oldSpeed[4];
-  bool accelChanged =
-      SystemParametersInfo(SPI_GETMOUSE, 0, oldSpeed, 0) && SystemParametersInfo(SPI_GETMOUSESPEED, 0, oldSpeed + 3, 0);
-
-  // use 1:1 motion
-  if (accelChanged) {
-    int newSpeed[4] = {0, 0, 0, 1};
-    accelChanged = SystemParametersInfo(SPI_SETMOUSE, 0, newSpeed, 0) ||
-                   SystemParametersInfo(SPI_SETMOUSESPEED, 0, newSpeed + 3, 0);
-  }
-
-  // move relative to mouse position
+#if defined(_WIN32)
+  sendMouseRelativeInterception(dx, dy);
+#else
   send_mouse_input(MOUSEEVENTF_MOVE, dx, dy, 0);
-
-  // restore mouse speed & acceleration
-  if (accelChanged) {
-    SystemParametersInfo(SPI_SETMOUSE, 0, oldSpeed, 0);
-    SystemParametersInfo(SPI_SETMOUSESPEED, 0, oldSpeed + 3, 0);
-  }
+#endif
 }
 
 /*!
