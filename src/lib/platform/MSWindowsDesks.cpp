@@ -19,6 +19,7 @@
 #include "mt/Thread.h"
 #include "platform/MSWindowsHook.h"
 #include "platform/MSWindowsScreen.h"
+#include "platform/MSWindowsRawInputInjector.h"
 
 #include <malloc.h>
 
@@ -125,6 +126,16 @@ InterceptionContext g_context = nullptr;
 constexpr unsigned short kMoveRelative = 0x0000;
 constexpr int kPrimaryMouse = 11; // INTERCEPTION_MOUSE(0)
 
+enum class MouseInjectionPath
+{
+  Unknown,
+  RawInput,
+  Interception,
+  SendInput
+};
+
+MouseInjectionPath g_injectionPath = MouseInjectionPath::Unknown;
+
 void initInterception()
 {
   if (g_createContext != nullptr) {
@@ -142,9 +153,17 @@ void initInterception()
 
 void sendMouseRelativeInterception(int dx, int dy)
 {
-  // Try to forward the relative move through the Interception driver. If the
-  // driver isn't available or initialization fails, fall back to the standard
-  // SendInput path so mouse movement still works.
+  // First try to inject using the raw input path which avoids tagging the
+  // mouse packets. If that fails, fall back to the Interception driver and
+  // finally to SendInput.
+  if (sendMouseRelativeRawInput(dx, dy)) {
+    if (g_injectionPath != MouseInjectionPath::RawInput) {
+      LOG_INFO("using raw input for mouse injection");
+      g_injectionPath = MouseInjectionPath::RawInput;
+    }
+    return;
+  }
+
   initInterception();
   if (g_context != nullptr && g_send != nullptr) {
     InterceptionMouseStroke stroke{};
@@ -152,10 +171,18 @@ void sendMouseRelativeInterception(int dx, int dy)
     stroke.y = dy;
     stroke.flags = kMoveRelative;
     g_send(g_context, kPrimaryMouse, reinterpret_cast<InterceptionStroke *>(&stroke), 1);
+    if (g_injectionPath != MouseInjectionPath::Interception) {
+      LOG_INFO("using interception driver for mouse injection");
+      g_injectionPath = MouseInjectionPath::Interception;
+    }
     return;
   }
 
   send_mouse_input(MOUSEEVENTF_MOVE, dx, dy, 0);
+  if (g_injectionPath != MouseInjectionPath::SendInput) {
+    LOG_INFO("using SendInput for mouse injection");
+    g_injectionPath = MouseInjectionPath::SendInput;
+  }
 }
 
 } // namespace
