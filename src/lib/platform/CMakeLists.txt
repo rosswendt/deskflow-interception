@@ -42,6 +42,8 @@ if(WIN32)
     MSWindowsPowerManager.h
     MSWindowsProcess.cpp
     MSWindowsProcess.h
+    MSWindowsRawInputInjector.cpp
+    MSWindowsRawInputInjector.h
     MSWindowsScreen.cpp
     MSWindowsScreen.h
     MSWindowsScreenSaver.cpp
