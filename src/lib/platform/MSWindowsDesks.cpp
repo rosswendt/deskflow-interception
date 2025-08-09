@@ -111,9 +111,17 @@ struct InterceptionMouseStroke
   unsigned int information;
 };
 
+struct InterceptionKeyStroke
+{
+  unsigned short code;
+  unsigned short state;
+  unsigned int information;
+};
+
 union InterceptionStroke
 {
   InterceptionMouseStroke mouse;
+  InterceptionKeyStroke key;
 };
 
 using CreateContextFn = InterceptionContext(__stdcall *)();
@@ -125,6 +133,9 @@ InterceptionContext g_context = nullptr;
 
 constexpr unsigned short kMoveRelative = 0x0000;
 constexpr int kPrimaryMouse = 11; // INTERCEPTION_MOUSE(0)
+constexpr int kPrimaryKeyboard = 1; // INTERCEPTION_KEYBOARD(0)
+constexpr unsigned short kKeyUp = 0x0001;
+constexpr unsigned short kKeyE0 = 0x0002;
 
 enum class MouseInjectionPath
 {
@@ -135,6 +146,16 @@ enum class MouseInjectionPath
 };
 
 MouseInjectionPath g_injectionPath = MouseInjectionPath::Unknown;
+
+enum class KeyboardInjectionPath
+{
+  Unknown,
+  RawInput,
+  Interception,
+  SendInput
+};
+
+KeyboardInjectionPath g_keyboardInjectionPath = KeyboardInjectionPath::Unknown;
 
 void initInterception()
 {
@@ -182,6 +203,44 @@ void sendMouseRelativeInterception(int dx, int dy)
   if (g_injectionPath != MouseInjectionPath::SendInput) {
     LOG_INFO("using SendInput for mouse injection");
     g_injectionPath = MouseInjectionPath::SendInput;
+  }
+}
+
+void sendKeyInterception(WORD vk, WORD scan, DWORD flags)
+{
+  // Try the raw input path first to avoid tagged key events. If that fails,
+  // fall back to the Interception driver and finally to SendInput.
+  if (sendKeyboardRawInput(vk, scan, flags)) {
+    if (g_keyboardInjectionPath != KeyboardInjectionPath::RawInput) {
+      LOG_INFO("using raw input for keyboard injection");
+      g_keyboardInjectionPath = KeyboardInjectionPath::RawInput;
+    }
+    return;
+  }
+
+  initInterception();
+  if (g_context != nullptr && g_send != nullptr) {
+    InterceptionKeyStroke stroke{};
+    stroke.code = scan;
+    stroke.state = 0;
+    if ((flags & KEYEVENTF_KEYUP) != 0) {
+      stroke.state |= kKeyUp;
+    }
+    if ((flags & KEYEVENTF_EXTENDEDKEY) != 0) {
+      stroke.state |= kKeyE0;
+    }
+    g_send(g_context, kPrimaryKeyboard, reinterpret_cast<InterceptionStroke *>(&stroke), 1);
+    if (g_keyboardInjectionPath != KeyboardInjectionPath::Interception) {
+      LOG_INFO("using interception driver for keyboard injection");
+      g_keyboardInjectionPath = KeyboardInjectionPath::Interception;
+    }
+    return;
+  }
+
+  send_keyboard_input(vk, scan, flags);
+  if (g_keyboardInjectionPath != KeyboardInjectionPath::SendInput) {
+    LOG_INFO("using SendInput for keyboard injection");
+    g_keyboardInjectionPath = KeyboardInjectionPath::SendInput;
   }
 }
 
@@ -737,7 +796,7 @@ void MSWindowsDesks::deskThread(void *vdesk)
 
     case DESKFLOW_MSG_FAKE_KEY:
       // Note, this is intended to be HI/LOWORD and not HI/LOBYTE
-      send_keyboard_input(HIWORD(msg.lParam), LOWORD(msg.lParam), (DWORD)msg.wParam);
+      sendKeyInterception(HIWORD(msg.lParam), LOWORD(msg.lParam), (DWORD)msg.wParam);
       break;
 
     case DESKFLOW_MSG_FAKE_BUTTON:

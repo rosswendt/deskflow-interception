@@ -12,5 +12,9 @@
 //! Returns true if the injection succeeds.
 bool sendMouseRelativeRawInput(int dx, int dy);
 
+//! Attempt to inject a keyboard event using the raw input path.
+//! Returns true if the injection succeeds.
+bool sendKeyboardRawInput(WORD vk, WORD scan, DWORD flags);
+
 #endif
 
