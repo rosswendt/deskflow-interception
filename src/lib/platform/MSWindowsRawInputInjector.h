@@ -8,9 +8,16 @@
 
 #if defined(_WIN32)
 
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+
 //! Attempt to inject a relative mouse move using the raw input path.
 //! Returns true if the injection succeeds.
 bool sendMouseRelativeRawInput(int dx, int dy);
+
+//! Attempt to inject a keyboard event using the raw input path.
+//! Returns true if the injection succeeds.
+bool sendKeyboardRawInput(WORD vk, WORD scan, DWORD flags);
 
 #endif
 
