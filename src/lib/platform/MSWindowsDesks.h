@@ -156,12 +156,6 @@ public:
   */
   void fakeKeyChord(WORD virtualKey, const std::vector<WORD> &modifiers) const;
 
-  //! Fake Unicode text input
-  /*!
-  Types the given text using Unicode events.
-  */
-  void fakeUnicodeText(const std::wstring &text) const;
-
   //! Fake mouse press/release
   /*!
   Synthesize a press or release of mouse button \c id.

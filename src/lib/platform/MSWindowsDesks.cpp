@@ -72,14 +72,12 @@
 #define DESKFLOW_MSG_FAKE_INPUT DESKFLOW_HOOK_LAST_MSG + 12
 // KeyChordMsg*; <unused>
 #define DESKFLOW_MSG_FAKE_CHORD DESKFLOW_HOOK_LAST_MSG + 13
-// std::wstring*; <unused>
-#define DESKFLOW_MSG_FAKE_TEXT DESKFLOW_HOOK_LAST_MSG + 14
 
 static bool send_keyboard_input(WORD wVk, WORD wScan, DWORD dwFlags)
 {
   INPUT inp;
   inp.type = INPUT_KEYBOARD;
-  inp.ki.wVk = (dwFlags & KEYEVENTF_UNICODE) ? 0 : wVk; // 1..254 inclusive otherwise
+  inp.ki.wVk = wVk; // 1..254 inclusive otherwise
   inp.ki.wScan = wScan;
   inp.ki.dwFlags = dwFlags & 0xF;
   inp.ki.time = 0;
@@ -151,14 +149,6 @@ bool send_scancode_key(WORD vk, bool keyUp)
   }
 
   return send_keyboard_input(0, static_cast<WORD>(sc & 0xFFu), flags);
-}
-
-void send_unicode_text(const std::wstring &text)
-{
-  for (wchar_t ch : text) {
-    send_keyboard_input(0, ch, KEYEVENTF_UNICODE);
-    send_keyboard_input(0, ch, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP);
-  }
 }
 
 void send_key_chord(WORD vk, const std::vector<WORD> &mods)
@@ -248,13 +238,11 @@ void sendMouseRelativeInterception(int dx, int dy)
 
 void sendKeyInterception(WORD vk, WORD scan, DWORD flags)
 {
-  if ((flags & KEYEVENTF_UNICODE) != 0) {
-    send_keyboard_input(0, scan, flags);
-  } else {
-    bool keyUp = (flags & KEYEVENTF_KEYUP) != 0;
-    if (!send_scancode_key(vk, keyUp)) {
-      send_keyboard_input(vk, 0, flags & ~KEYEVENTF_SCANCODE);
-    }
+  bool keyUp = (flags & KEYEVENTF_KEYUP) != 0;
+  if ((flags & KEYEVENTF_SCANCODE) != 0 || vk == 0) {
+    send_keyboard_input(0, scan, flags | KEYEVENTF_SCANCODE);
+  } else if (!send_scancode_key(vk, keyUp)) {
+    send_keyboard_input(vk, 0, flags & ~KEYEVENTF_SCANCODE);
   }
   if (g_keyboardInjectionPath != KeyboardInjectionPath::SendInput) {
     LOG_INFO("using SendInput for keyboard injection");
@@ -405,12 +393,6 @@ void MSWindowsDesks::fakeKeyChord(WORD virtualKey, const std::vector<WORD> &modi
 {
   auto *msg = new KeyChordMsg{virtualKey, modifiers};
   sendMessage(DESKFLOW_MSG_FAKE_CHORD, reinterpret_cast<WPARAM>(msg), 0);
-}
-
-void MSWindowsDesks::fakeUnicodeText(const std::wstring &text) const
-{
-  auto *copy = new std::wstring(text);
-  sendMessage(DESKFLOW_MSG_FAKE_TEXT, reinterpret_cast<WPARAM>(copy), 0);
 }
 
 void MSWindowsDesks::fakeMouseButton(ButtonID button, bool press)
@@ -833,13 +815,6 @@ void MSWindowsDesks::deskThread(void *vdesk)
       auto *chord = reinterpret_cast<KeyChordMsg *>(msg.wParam);
       send_key_chord(chord->vk, chord->mods);
       delete chord;
-      break;
-    }
-
-    case DESKFLOW_MSG_FAKE_TEXT: {
-      auto *text = reinterpret_cast<std::wstring *>(msg.wParam);
-      send_unicode_text(*text);
-      delete text;
       break;
     }
 
