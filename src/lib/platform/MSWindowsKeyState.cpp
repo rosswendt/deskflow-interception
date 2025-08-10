@@ -13,6 +13,8 @@
 #include "common/Constants.h"
 #include "platform/MSWindowsDesks.h"
 #include "platform/MSWindowsHandle.h"
+#include <string>
+#include <vector>
 
 // extended mouse buttons
 #if !defined(VK_XBUTTON1)
@@ -554,6 +556,26 @@ static const Win32Modifiers s_modifiers[] = {{VK_SHIFT, KeyModifierShift},      
                                              {VK_MENU, KeyModifierAlt},         {VK_LMENU, KeyModifierAlt},
                                              {VK_RMENU, KeyModifierAlt},        {VK_LWIN, KeyModifierSuper},
                                              {VK_RWIN, KeyModifierSuper}};
+
+static bool is_modifier_vk(WORD vk)
+{
+  switch (vk) {
+  case VK_SHIFT:
+  case VK_LSHIFT:
+  case VK_RSHIFT:
+  case VK_CONTROL:
+  case VK_LCONTROL:
+  case VK_RCONTROL:
+  case VK_MENU:
+  case VK_LMENU:
+  case VK_RMENU:
+  case VK_LWIN:
+  case VK_RWIN:
+    return true;
+  default:
+    return false;
+  }
+}
 
 MSWindowsKeyState::MSWindowsKeyState(
     MSWindowsDesks *desks, void *eventTarget, IEventQueue *events, std::vector<std::string> layouts,
@@ -1178,6 +1200,30 @@ void MSWindowsKeyState::fakeKey(const Keystroke &keystroke)
 
     // get the virtual key for the button
     WORD vk = (WORD)keystroke.m_data.m_button.m_client;
+
+    if (vk == 0 && keystroke.m_data.m_button.m_press) {
+      std::wstring text(1, static_cast<wchar_t>(scanCode & 0xFFu));
+      m_desks->fakeUnicodeText(text);
+      break;
+    }
+
+    if (!is_modifier_vk(vk) && vk != VK_SNAPSHOT) {
+      if (keystroke.m_data.m_button.m_press) {
+        std::vector<WORD> mods;
+        KeyModifierMask mask = getActiveModifiers();
+        if ((mask & KeyModifierShift) != 0)
+          mods.push_back(VK_SHIFT);
+        if ((mask & KeyModifierControl) != 0)
+          mods.push_back(VK_CONTROL);
+        if ((mask & KeyModifierAlt) != 0)
+          mods.push_back(VK_MENU);
+        if ((mask & KeyModifierSuper) != 0)
+          mods.push_back(VK_LWIN);
+        m_desks->fakeKeyChord(vk, mods);
+      }
+      break;
+    }
+
     DWORD flags = 0;
 
     if (keystroke.m_data.m_button.m_press == false)
