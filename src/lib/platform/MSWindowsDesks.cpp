@@ -19,7 +19,6 @@
 #include "mt/Thread.h"
 #include "platform/MSWindowsHook.h"
 #include "platform/MSWindowsScreen.h"
-#include "platform/MSWindowsRawInputInjector.h"
 
 #include <malloc.h>
 
@@ -98,90 +97,37 @@ static void send_mouse_input(DWORD dwFlags, DWORD dx, DWORD dy, DWORD dwData)
 #if defined(_WIN32)
 namespace {
 
-typedef void *InterceptionContext;
-typedef int InterceptionDevice;
-
-struct InterceptionMouseStroke
-{
-  unsigned short state;
-  unsigned short flags;
-  short rolling;
-  int x;
-  int y;
-  unsigned int information;
-};
-
-union InterceptionStroke
-{
-  InterceptionMouseStroke mouse;
-};
-
-using CreateContextFn = InterceptionContext(__stdcall *)();
-using SendFn = int(__stdcall *)(InterceptionContext, InterceptionDevice, const InterceptionStroke *, unsigned int);
-
-CreateContextFn g_createContext = nullptr;
-SendFn g_send = nullptr;
-InterceptionContext g_context = nullptr;
-
-constexpr unsigned short kMoveRelative = 0x0000;
-constexpr int kPrimaryMouse = 11; // INTERCEPTION_MOUSE(0)
-
 enum class MouseInjectionPath
 {
   Unknown,
-  RawInput,
-  Interception,
   SendInput
 };
 
 MouseInjectionPath g_injectionPath = MouseInjectionPath::Unknown;
 
-void initInterception()
+enum class KeyboardInjectionPath
 {
-  if (g_createContext != nullptr) {
-    return;
-  }
+  Unknown,
+  SendInput
+};
 
-  if (HMODULE lib = LoadLibraryW(L"interception.dll")) {
-    g_createContext = reinterpret_cast<CreateContextFn>(GetProcAddress(lib, "interception_create_context"));
-    g_send = reinterpret_cast<SendFn>(GetProcAddress(lib, "interception_send"));
-    if (g_createContext != nullptr) {
-      g_context = g_createContext();
-    }
-  }
-}
+KeyboardInjectionPath g_keyboardInjectionPath = KeyboardInjectionPath::Unknown;
 
 void sendMouseRelativeInterception(int dx, int dy)
 {
-  // First try to inject using the raw input path which avoids tagging the
-  // mouse packets. If that fails, fall back to the Interception driver and
-  // finally to SendInput.
-  if (sendMouseRelativeRawInput(dx, dy)) {
-    if (g_injectionPath != MouseInjectionPath::RawInput) {
-      LOG_INFO("using raw input for mouse injection");
-      g_injectionPath = MouseInjectionPath::RawInput;
-    }
-    return;
-  }
-
-  initInterception();
-  if (g_context != nullptr && g_send != nullptr) {
-    InterceptionMouseStroke stroke{};
-    stroke.x = dx;
-    stroke.y = dy;
-    stroke.flags = kMoveRelative;
-    g_send(g_context, kPrimaryMouse, reinterpret_cast<InterceptionStroke *>(&stroke), 1);
-    if (g_injectionPath != MouseInjectionPath::Interception) {
-      LOG_INFO("using interception driver for mouse injection");
-      g_injectionPath = MouseInjectionPath::Interception;
-    }
-    return;
-  }
-
   send_mouse_input(MOUSEEVENTF_MOVE, dx, dy, 0);
   if (g_injectionPath != MouseInjectionPath::SendInput) {
     LOG_INFO("using SendInput for mouse injection");
     g_injectionPath = MouseInjectionPath::SendInput;
+  }
+}
+
+void sendKeyInterception(WORD vk, WORD scan, DWORD flags)
+{
+  send_keyboard_input(vk, scan, flags);
+  if (g_keyboardInjectionPath != KeyboardInjectionPath::SendInput) {
+    LOG_INFO("using SendInput for keyboard injection");
+    g_keyboardInjectionPath = KeyboardInjectionPath::SendInput;
   }
 }
 
@@ -737,7 +683,7 @@ void MSWindowsDesks::deskThread(void *vdesk)
 
     case DESKFLOW_MSG_FAKE_KEY:
       // Note, this is intended to be HI/LOWORD and not HI/LOBYTE
-      send_keyboard_input(HIWORD(msg.lParam), LOWORD(msg.lParam), (DWORD)msg.wParam);
+      sendKeyInterception(HIWORD(msg.lParam), LOWORD(msg.lParam), (DWORD)msg.wParam);
       break;
 
     case DESKFLOW_MSG_FAKE_BUTTON:

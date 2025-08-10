@@ -42,8 +42,6 @@ if(WIN32)
     MSWindowsPowerManager.h
     MSWindowsProcess.cpp
     MSWindowsProcess.h
-    MSWindowsRawInputInjector.cpp
-    MSWindowsRawInputInjector.h
     MSWindowsScreen.cpp
     MSWindowsScreen.h
     MSWindowsScreenSaver.cpp
@@ -52,7 +50,6 @@ if(WIN32)
     MSWindowsSession.h
     MSWindowsWatchdog.cpp
     MSWindowsWatchdog.h
-    interception.h
   )
 elseif(APPLE)
   set(PLATFORM_SOURCES
