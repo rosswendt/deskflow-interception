@@ -21,6 +21,8 @@
 #include "platform/MSWindowsScreen.h"
 
 #include <malloc.h>
+#include <string>
+#include <vector>
 
 #if !defined(SPI_GETSCREENSAVERRUNNING)
 #define SPI_GETSCREENSAVERRUNNING 114
@@ -69,7 +71,7 @@
 // enable; <unused>
 #define DESKFLOW_MSG_FAKE_INPUT DESKFLOW_HOOK_LAST_MSG + 12
 
-static void send_keyboard_input(WORD wVk, WORD wScan, DWORD dwFlags)
+static bool send_keyboard_input(WORD wVk, WORD wScan, DWORD dwFlags)
 {
   INPUT inp;
   inp.type = INPUT_KEYBOARD;
@@ -78,7 +80,14 @@ static void send_keyboard_input(WORD wVk, WORD wScan, DWORD dwFlags)
   inp.ki.dwFlags = dwFlags & 0xF;
   inp.ki.time = 0;
   inp.ki.dwExtraInfo = 0;
-  SendInput(1, &inp, sizeof(inp));
+  UINT sent = SendInput(1, &inp, sizeof(inp));
+  if (sent == 0) {
+    LOG_WARN(
+        "SendInput failed for vk=0x%02x scan=0x%02x flags=0x%02x, err=%lu", wVk, wScan, dwFlags & 0xF, GetLastError()
+    );
+    return false;
+  }
+  return true;
 }
 
 static void send_mouse_input(DWORD dwFlags, DWORD dx, DWORD dy, DWORD dwData)
@@ -96,6 +105,111 @@ static void send_mouse_input(DWORD dwFlags, DWORD dx, DWORD dy, DWORD dwData)
 
 #if defined(_WIN32)
 namespace {
+
+HKL get_foreground_layout()
+{
+  HWND hwnd = GetForegroundWindow();
+  DWORD tid = 0;
+  if (hwnd != nullptr) {
+    GetWindowThreadProcessId(hwnd, &tid);
+  }
+  return GetKeyboardLayout(tid);
+}
+
+bool send_scancode_key(WORD vk, bool keyUp)
+{
+  HKL layout = get_foreground_layout();
+  UINT sc = MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC, layout);
+  UINT scEx = MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC_EX, layout);
+  if (vk == VK_PAUSE) {
+    INPUT seq[2]{};
+    seq[0].type = INPUT_KEYBOARD;
+    seq[0].ki.wScan = 0x45;
+    seq[0].ki.dwFlags = KEYEVENTF_SCANCODE;
+    seq[1] = seq[0];
+    seq[1].ki.dwFlags |= KEYEVENTF_KEYUP;
+    return SendInput(2, seq, sizeof(INPUT)) == 2;
+  }
+
+  if (sc == 0) {
+    return send_keyboard_input(vk, 0, keyUp ? KEYEVENTF_KEYUP : 0);
+  }
+
+  DWORD flags = KEYEVENTF_SCANCODE | (keyUp ? KEYEVENTF_KEYUP : 0);
+  if ((scEx & 0x100u) != 0) {
+    flags |= KEYEVENTF_EXTENDEDKEY;
+  }
+
+  return send_keyboard_input(0, static_cast<WORD>(sc & 0xFFu), flags);
+}
+
+void send_unicode_text(const std::wstring &text)
+{
+  for (wchar_t ch : text) {
+    send_keyboard_input(0, ch, KEYEVENTF_UNICODE);
+    send_keyboard_input(0, ch, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP);
+  }
+}
+
+void send_key_chord(WORD vk, const std::vector<WORD> &mods)
+{
+  std::vector<INPUT> seq;
+  std::vector<WORD> pressedMods;
+  HKL layout = get_foreground_layout();
+
+  for (WORD mod : mods) {
+    if ((GetKeyState(mod) & 0x8000) == 0) {
+      UINT sc = MapVirtualKeyExW(mod, MAPVK_VK_TO_VSC, layout);
+      UINT scEx = MapVirtualKeyExW(mod, MAPVK_VK_TO_VSC_EX, layout);
+      INPUT in{};
+      in.type = INPUT_KEYBOARD;
+      in.ki.wScan = sc & 0xFFu;
+      in.ki.dwFlags = KEYEVENTF_SCANCODE;
+      if ((scEx & 0x100u) != 0) {
+        in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+      }
+      seq.push_back(in);
+      pressedMods.push_back(mod);
+    }
+  }
+
+  {
+    UINT sc = MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC, layout);
+    UINT scEx = MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC_EX, layout);
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    if (sc != 0) {
+      in.ki.wScan = sc & 0xFFu;
+      in.ki.dwFlags = KEYEVENTF_SCANCODE;
+      if ((scEx & 0x100u) != 0) {
+        in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+      }
+    } else {
+      in.ki.wVk = vk;
+    }
+    seq.push_back(in);
+    INPUT up = in;
+    up.ki.dwFlags |= KEYEVENTF_KEYUP;
+    seq.push_back(up);
+  }
+
+  for (auto it = pressedMods.rbegin(); it != pressedMods.rend(); ++it) {
+    UINT sc = MapVirtualKeyExW(*it, MAPVK_VK_TO_VSC, layout);
+    UINT scEx = MapVirtualKeyExW(*it, MAPVK_VK_TO_VSC_EX, layout);
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wScan = sc & 0xFFu;
+    in.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
+    if ((scEx & 0x100u) != 0) {
+      in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+    }
+    seq.push_back(in);
+  }
+
+  if (!seq.empty()) {
+    SendInput(static_cast<UINT>(seq.size()), seq.data(), sizeof(INPUT));
+  }
+}
 
 enum class MouseInjectionPath
 {
@@ -124,7 +238,14 @@ void sendMouseRelativeInterception(int dx, int dy)
 
 void sendKeyInterception(WORD vk, WORD scan, DWORD flags)
 {
-  send_keyboard_input(vk, scan, flags);
+  if ((flags & KEYEVENTF_UNICODE) != 0) {
+    send_keyboard_input(0, scan, flags);
+  } else {
+    bool keyUp = (flags & KEYEVENTF_KEYUP) != 0;
+    if (!send_scancode_key(vk, keyUp)) {
+      send_keyboard_input(vk, 0, flags & ~KEYEVENTF_SCANCODE);
+    }
+  }
   if (g_keyboardInjectionPath != KeyboardInjectionPath::SendInput) {
     LOG_INFO("using SendInput for keyboard injection");
     g_keyboardInjectionPath = KeyboardInjectionPath::SendInput;
