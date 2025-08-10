@@ -70,6 +70,10 @@
 #define DESKFLOW_MSG_FAKE_REL_MOVE DESKFLOW_HOOK_LAST_MSG + 11
 // enable; <unused>
 #define DESKFLOW_MSG_FAKE_INPUT DESKFLOW_HOOK_LAST_MSG + 12
+// KeyChordMsg*; <unused>
+#define DESKFLOW_MSG_FAKE_CHORD DESKFLOW_HOOK_LAST_MSG + 13
+// std::wstring*; <unused>
+#define DESKFLOW_MSG_FAKE_TEXT DESKFLOW_HOOK_LAST_MSG + 14
 
 static bool send_keyboard_input(WORD wVk, WORD wScan, DWORD dwFlags)
 {
@@ -105,6 +109,12 @@ static void send_mouse_input(DWORD dwFlags, DWORD dx, DWORD dy, DWORD dwData)
 
 #if defined(_WIN32)
 namespace {
+
+struct KeyChordMsg
+{
+  WORD vk;
+  std::vector<WORD> mods;
+};
 
 HKL get_foreground_layout()
 {
@@ -389,6 +399,18 @@ void MSWindowsDesks::getCursorPos(int32_t &x, int32_t &y) const
 void MSWindowsDesks::fakeKeyEvent(WORD virtualKey, WORD scanCode, DWORD flags, bool /*isAutoRepeat*/) const
 {
   sendMessage(DESKFLOW_MSG_FAKE_KEY, flags, MAKELPARAM(scanCode, virtualKey));
+}
+
+void MSWindowsDesks::fakeKeyChord(WORD virtualKey, const std::vector<WORD> &modifiers) const
+{
+  auto *msg = new KeyChordMsg{virtualKey, modifiers};
+  sendMessage(DESKFLOW_MSG_FAKE_CHORD, reinterpret_cast<WPARAM>(msg), 0);
+}
+
+void MSWindowsDesks::fakeUnicodeText(const std::wstring &text) const
+{
+  auto *copy = new std::wstring(text);
+  sendMessage(DESKFLOW_MSG_FAKE_TEXT, reinterpret_cast<WPARAM>(copy), 0);
 }
 
 void MSWindowsDesks::fakeMouseButton(ButtonID button, bool press)
@@ -806,6 +828,20 @@ void MSWindowsDesks::deskThread(void *vdesk)
       // Note, this is intended to be HI/LOWORD and not HI/LOBYTE
       sendKeyInterception(HIWORD(msg.lParam), LOWORD(msg.lParam), (DWORD)msg.wParam);
       break;
+
+    case DESKFLOW_MSG_FAKE_CHORD: {
+      auto *chord = reinterpret_cast<KeyChordMsg *>(msg.wParam);
+      send_key_chord(chord->vk, chord->mods);
+      delete chord;
+      break;
+    }
+
+    case DESKFLOW_MSG_FAKE_TEXT: {
+      auto *text = reinterpret_cast<std::wstring *>(msg.wParam);
+      send_unicode_text(*text);
+      delete text;
+      break;
+    }
 
     case DESKFLOW_MSG_FAKE_BUTTON:
       if (msg.wParam != 0) {
