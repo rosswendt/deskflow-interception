@@ -1,72 +1,99 @@
-/*
- * Deskflow -- mouse and keyboard sharing utility
- * SPDX-FileCopyrightText: (C) 2025 Symless Ltd.
- * SPDX-License-Identifier: GPL-2.0-only WITH LicenseRef-OpenSSL-Exception
- */
+// wix-custom.cpp
+// ASCII only
 
 #include "wix-custom.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
-
-// Include after Windows.h
+#include <Msi.h>        // MsiSetPropertyW
 #include <MsiQuery.h>
 
 #include <stdio.h>
 #include <string>
 
 namespace {
-// Warning: DLL will crash with error code 1603 if we exceed this.
-const auto kLogLineMax = 1024;
+const size_t kLogLineMax = 1024;
+const std::string kLogPrefix = std::string("@CMAKE_PROJECT_NAME@") + " installer: ";
+static std::string s_log; // reusable buffer
+}
 
-// Prefixes log messages with the app name so they're easier to find/filter.
-const std::string kLogPrefix = std::string(kAppId) + " installer: ";
+#define MS_LOG_DEBUG(fmt, ...)                         \
+  do {                                                 \
+    s_log.resize(kLogLineMax);                         \
+    sprintf(s_log.data(), fmt, __VA_ARGS__);           \
+    OutputDebugStringA((kLogPrefix + s_log + "\n").c_str()); \
+  } while (0)
 
-// Note: Resized to log line max when used.
-static std::string s_logMessageBuffer; // NOSONAR - Must be mutable.
-} // namespace
-
-// This log output can be viewed by using the DebugView program.
-#define MS_LOG_DEBUG(message, ...)                                                                                     \
-  s_logMessageBuffer.resize(kLogLineMax);                                                                              \
-  sprintf(s_logMessageBuffer.data(), message, __VA_ARGS__);                                                            \
-  OutputDebugStringA((kLogPrefix + s_logMessageBuffer + "\n").c_str())
-
-extern "C" __declspec(dllexport) UINT __stdcall CheckVCRedist(MSIHANDLE hInstall)
-{
-  const auto kKeyName = TEXT(kRegKey);
-  const auto kValueName = TEXT("Minor");
-  const auto kProperty = "VC_REDIST_VERSION_OK";
-
-  MS_LOG_DEBUG("checking for msvc redist v%d.%d", kWindowsRuntimeMajor, kWindowsRuntimeMinor);
-
-  HKEY hKey;
-  if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, kKeyName, 0, KEY_READ, &hKey) != ERROR_SUCCESS) {
-    MS_LOG_DEBUG("msvc redist registry key not found");
-    return ERROR_FUNCTION_FAILED;
-  }
-
-  MS_LOG_DEBUG("msvc redist registry key found, querying minor version");
-
-  DWORD minorVersion = 0;
-  DWORD size = sizeof(DWORD);
-  RegQueryValueEx(hKey, kValueName, nullptr, nullptr, (LPBYTE)&minorVersion, &size);
+// Helpers that always read the x64 registry view
+static bool RegReadDWORD64(const wchar_t* subkey, const wchar_t* value, DWORD* out) {
+  HKEY hKey = 0;
+  LONG rc = RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey, 0, KEY_READ | KEY_WOW64_64KEY, &hKey);
+  if (rc != ERROR_SUCCESS) return false;
+  DWORD type = 0, size = sizeof(DWORD), data = 0;
+  rc = RegGetValueW(hKey, 0, value, RRF_RT_REG_DWORD, &type, &data, &size);
   RegCloseKey(hKey);
+  if (rc != ERROR_SUCCESS) return false;
+  *out = data;
+  return true;
+}
 
-  MS_LOG_DEBUG("msvc redist minor version: %lu", minorVersion);
+static bool RegReadString64(const wchar_t* subkey, const wchar_t* value, wchar_t* buf, DWORD* inout_chars) {
+  HKEY hKey = 0;
+  LONG rc = RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey, 0, KEY_READ | KEY_WOW64_64KEY, &hKey);
+  if (rc != ERROR_SUCCESS) return false;
+  DWORD type = 0;
+  DWORD bytes = (*inout_chars) * sizeof(wchar_t);
+  rc = RegGetValueW(hKey, 0, value, RRF_RT_REG_SZ, &type, buf, &bytes);
+  RegCloseKey(hKey);
+  if (rc != ERROR_SUCCESS) return false;
+  *inout_chars = bytes / sizeof(wchar_t);
+  return true;
+}
 
-  if (minorVersion < kWindowsRuntimeMinor) {
-    MS_LOG_DEBUG("msvc redist minor version %lu too low, expected >= %d", minorVersion, kWindowsRuntimeMinor);
-    // Returning success allows the installer will show a friendly error message.
-    return ERROR_SUCCESS;
+extern "C" __declspec(dllexport) UINT __stdcall CheckVCRedist(MSIHANDLE hInstall) {
+  // default: not ok
+  MsiSetPropertyW(hInstall, L"VC_REDIST_VERSION_OK", L"0");
+
+  MS_LOG_DEBUG("checking for msvc redist >= %d.%d", REQ_MSVC_MAJOR, REQ_MSVC_MINOR);
+
+  // Ensure the redist key exists and is marked Installed=1
+  DWORD installed = 0;
+  if (!RegReadDWORD64(VC_REDIST_REG_KEY, VC_REDIST_VAL_INST, &installed) || installed == 0) {
+    MS_LOG_DEBUG("msvc redist not installed or key missing", 0);
+    return ERROR_SUCCESS; // let MSI show friendly message via condition
   }
 
-  MS_LOG_DEBUG("msvc redist version ok, setting: %s", kProperty);
-  if (MsiSetProperty(hInstall, kProperty, "ok") != ERROR_SUCCESS) {
-    MS_LOG_DEBUG("failed to set property: %s", kProperty);
-    return ERROR_FUNCTION_FAILED;
+  // Prefer numeric Major/Minor if present
+  DWORD major = 0, minor = 0;
+  bool haveMaj = RegReadDWORD64(VC_REDIST_REG_KEY, L"Major", &major);
+  bool haveMin = RegReadDWORD64(VC_REDIST_REG_KEY, L"Minor", &minor);
+
+  bool ok = false;
+  if (haveMaj && haveMin) {
+    MS_LOG_DEBUG("found msvc version Major=%lu Minor=%lu", major, minor);
+    if (major > REQ_MSVC_MAJOR) ok = true;
+    else if (major == REQ_MSVC_MAJOR && minor >= REQ_MSVC_MINOR) ok = true;
+  } else {
+    // Fallback to parsing Version string like "v14.44.3335.0"
+    wchar_t ver[64] = {0};
+    DWORD n = (DWORD)(sizeof(ver) / sizeof(ver[0]));
+    if (RegReadString64(VC_REDIST_REG_KEY, VC_REDIST_VAL_VER, ver, &n)) {
+      unsigned int vmaj = 0, vmin = 0;
+      swscanf_s(ver, L"v%u.%u", &vmaj, &vmin);
+      MS_LOG_DEBUG("parsed msvc version string: %u.%u", vmaj, vmin);
+      if (vmaj > REQ_MSVC_MAJOR) ok = true;
+      else if (vmaj == REQ_MSVC_MAJOR && vmin >= REQ_MSVC_MINOR) ok = true;
+    } else {
+      MS_LOG_DEBUG("version string not found", 0);
+    }
   }
 
-  MS_LOG_DEBUG("msvc redist version check successful");
-  return ERROR_SUCCESS;
+  if (ok) {
+    MS_LOG_DEBUG("msvc redist check passed; setting property", 0);
+    MsiSetPropertyW(hInstall, L"VC_REDIST_VERSION_OK", L"1");
+  } else {
+    MS_LOG_DEBUG("msvc redist check failed", 0);
+  }
+
+  return ERROR_SUCCESS; // never hard-fail the install; let MSI logic decide
 }

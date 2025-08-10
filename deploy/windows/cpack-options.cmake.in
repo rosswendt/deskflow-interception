@@ -1,6 +1,11 @@
-#SPDX-FileCopyrightText: 2025 Chris Rizzitello <sithlord48@gmail.com>
-#SPDX-License-Identifier: MIT
+# Injected by CPack at package time
 
-if(CPACK_GENERATOR MATCHES 7Z|ZIP)
-  set(CPACK_PACKAGE_FILE_NAME ${CPACK_PACKAGE_FILE_NAME}-portable)
+# Honor an explicit arch if already set; otherwise fall back to the configured build arch.
+if(NOT DEFINED CPACK_WIX_ARCHITECTURE OR CPACK_WIX_ARCHITECTURE STREQUAL "")
+  set(CPACK_WIX_ARCHITECTURE "@BUILD_ARCHITECTURE@")
+endif()
+
+# Ensure OS_STRING matches the final WiX arch for file naming
+if(NOT DEFINED OS_STRING OR OS_STRING STREQUAL "")
+  set(OS_STRING "win-@BUILD_ARCHITECTURE@")
 endif()
