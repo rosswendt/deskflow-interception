@@ -29,7 +29,7 @@ DeskflowXkbKeyboard::DeskflowXkbKeyboard()
 
 const char *DeskflowXkbKeyboard::getLayout() const
 {
-  return m_data.layout ? m_data.layout : "us";
+  return m_data.layout ? m_data.layout : "";
 }
 
 const char *DeskflowXkbKeyboard::getVariant() const
