@@ -1201,9 +1201,13 @@ void MSWindowsKeyState::fakeKey(const Keystroke &keystroke)
     // get the virtual key for the button
     WORD vk = (WORD)keystroke.m_data.m_button.m_client;
 
-    if (vk == 0 && keystroke.m_data.m_button.m_press) {
-      std::wstring text(1, static_cast<wchar_t>(scanCode & 0xFFu));
-      m_desks->fakeUnicodeText(text);
+    if (vk == 0) {
+      DWORD flags = KEYEVENTF_SCANCODE;
+      if (!keystroke.m_data.m_button.m_press)
+        flags |= KEYEVENTF_KEYUP;
+      if (scanCode & 0x100)
+        flags |= KEYEVENTF_EXTENDEDKEY;
+      m_desks->fakeKeyEvent(vk, scanCode, flags, keystroke.m_data.m_button.m_repeat);
       break;
     }
 
