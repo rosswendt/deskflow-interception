@@ -188,6 +188,17 @@ elseif(UNIX AND NOT APPLE)
   )
 endif()
 
+# --- CPack / WiX (x64) ---
+if (CMAKE_SIZEOF_VOID_P EQUAL 8)
+  set(_ARCH_TAG "x64")
+else()
+  set(_ARCH_TAG "x86")
+endif()
+
+set(CPACK_GENERATOR "WIX;7Z" CACHE STRING "" FORCE)
+set(CPACK_WIX_ARCHITECTURE "${_ARCH_TAG}" CACHE STRING "" FORCE)
+set(CPACK_PACKAGE_FILE_NAME "${CMAKE_PROJECT_NAME}-${CMAKE_PROJECT_VERSION}-win-${_ARCH_TAG}" CACHE STRING "" FORCE)
+
 option(BUILD_INSTALLER "Build installer" ON)
 if(BUILD_INSTALLER)
     add_subdirectory(deploy)

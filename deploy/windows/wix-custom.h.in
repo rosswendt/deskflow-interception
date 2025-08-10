@@ -6,10 +6,19 @@
 
 #pragma once
 
-const auto kAppId = "@CMAKE_PROJECT_NAME@";
-const auto kRegKey = "SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\@BUILD_ARCHITECTURE@";
+// This custom action is built for the x64 MSI
+static_assert(sizeof(void*) == 8, "wix-custom.dll must be built x64 for the x64 MSI");
 
-// clang-format off
-const auto kWindowsRuntimeMajor = @REQUIRED_MSVC_RUNTIME_MAJOR@;
-const auto kWindowsRuntimeMinor = @REQUIRED_MSVC_RUNTIME_MINOR@;
-// clang-format on
+constexpr wchar_t kAppId[] = L"@CMAKE_PROJECT_NAME@";
+
+// VC++ Redist (x64 view) registry keys
+#define VC_REDIST_REG_KEY  L"SOFTWARE\\Microsoft\\VisualStudio\\@REQUIRED_MSVC_RUNTIME_MAJOR@.0\\VC\\Runtimes\\x64"
+#define VC_REDIST_VAL_INST L"Installed"
+#define VC_REDIST_VAL_VER  L"Version"
+
+#define REQ_MSVC_MAJOR @REQUIRED_MSVC_RUNTIME_MAJOR@
+#define REQ_MSVC_MINOR @REQUIRED_MSVC_RUNTIME_MINOR@
+
+// Optional: keep these if your code uses them
+constexpr int kWindowsRuntimeMajor = REQ_MSVC_MAJOR;
+constexpr int kWindowsRuntimeMinor = REQ_MSVC_MINOR;
