@@ -14,7 +14,6 @@
 #include "platform/MSWindowsDesks.h"
 #include "platform/MSWindowsHandle.h"
 #include <string>
-#include <vector>
 
 // extended mouse buttons
 #if !defined(VK_XBUTTON1)
@@ -1208,23 +1207,6 @@ void MSWindowsKeyState::fakeKey(const Keystroke &keystroke)
       if (scanCode & 0x100)
         flags |= KEYEVENTF_EXTENDEDKEY;
       m_desks->fakeKeyEvent(vk, scanCode, flags, keystroke.m_data.m_button.m_repeat);
-      break;
-    }
-
-    if (!is_modifier_vk(vk) && vk != VK_SNAPSHOT) {
-      if (keystroke.m_data.m_button.m_press) {
-        std::vector<WORD> mods;
-        KeyModifierMask mask = getActiveModifiers();
-        if ((mask & KeyModifierShift) != 0)
-          mods.push_back(VK_SHIFT);
-        if ((mask & KeyModifierControl) != 0)
-          mods.push_back(VK_CONTROL);
-        if ((mask & KeyModifierAlt) != 0)
-          mods.push_back(VK_MENU);
-        if ((mask & KeyModifierSuper) != 0)
-          mods.push_back(VK_LWIN);
-        m_desks->fakeKeyChord(vk, mods);
-      }
       break;
     }
 

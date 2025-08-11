@@ -15,7 +15,6 @@
 
 #include <map>
 #include <string>
-#include <vector>
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -149,12 +148,6 @@ public:
   Synthesize a press or release of key \c button.
   */
   void fakeKeyEvent(WORD virtualKey, WORD scanCode, DWORD flags, bool isAutoRepeat) const;
-
-  //! Fake key with modifiers
-  /*!
-  Sends a key press and release with the given modifier virtual keys applied.
-  */
-  void fakeKeyChord(WORD virtualKey, const std::vector<WORD> &modifiers) const;
 
   //! Fake mouse press/release
   /*!
