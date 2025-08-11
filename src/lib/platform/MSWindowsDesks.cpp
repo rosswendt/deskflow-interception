@@ -256,6 +256,13 @@ void handle_raw_input(HRAWINPUT hraw)
   }
 
   RAWINPUT *raw = reinterpret_cast<RAWINPUT *>(data.data());
+  // Raw input generated via SendInput has no originating device. Ignore such
+  // events so that synthesised input does not get captured and re-injected,
+  // which would otherwise create a feedback loop.
+  if (raw->header.hDevice == nullptr) {
+    return;
+  }
+
   std::vector<INPUT> inputs;
 
   if (raw->header.dwType == RIM_TYPEMOUSE) {
