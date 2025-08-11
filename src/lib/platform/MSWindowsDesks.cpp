@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <malloc.h>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #include <hidusage.h>
@@ -165,6 +166,8 @@ enum class KeyboardInjectionPath
 
 KeyboardInjectionPath g_keyboardInjectionPath = KeyboardInjectionPath::Unknown;
 
+bool g_captureRawInput = false;
+
 void sendMouseRelativeInterception(int dx, int dy)
 {
   send_mouse_input(MOUSEEVENTF_MOVE, dx, dy, 0);
@@ -176,6 +179,10 @@ void sendMouseRelativeInterception(int dx, int dy)
 
 void handle_raw_input(HRAWINPUT hraw)
 {
+  if (!g_captureRawInput) {
+    return;
+  }
+
   UINT size = 0;
   if (GetRawInputData(hraw, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER)) != 0) {
     LOG_WARN("GetRawInputData size query failed, err=%lu", GetLastError());
@@ -196,16 +203,6 @@ void handle_raw_input(HRAWINPUT hraw)
     return;
   }
 
-  if (raw->header.dwType == RIM_TYPEMOUSE) {
-    if (raw->data.mouse.ulExtraInformation == kDeskflowExtraInfo) {
-      return;
-    }
-  } else if (raw->header.dwType == RIM_TYPEKEYBOARD) {
-    if (raw->data.keyboard.ExtraInformation == kDeskflowExtraInfo) {
-      return;
-    }
-  }
-
   std::vector<INPUT> inputs;
 
   if (raw->header.dwType == RIM_TYPEMOUSE) {
@@ -217,7 +214,6 @@ void handle_raw_input(HRAWINPUT hraw)
       in.mi.dx = m.lLastX;
       in.mi.dy = m.lLastY;
       in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE;
-      in.mi.dwExtraInfo = kDeskflowExtraInfo;
       inputs.push_back(in);
       LOG_DEBUG("raw mouse move %ld,%ld -> MOVE", m.lLastX, m.lLastY);
     }
@@ -227,7 +223,6 @@ void handle_raw_input(HRAWINPUT hraw)
       in.type = INPUT_MOUSE;
       in.mi.dwFlags = flags;
       in.mi.mouseData = data;
-      in.mi.dwExtraInfo = kDeskflowExtraInfo;
       inputs.push_back(in);
       LOG_DEBUG("raw mouse button 0x%04x data=%lu -> flags=0x%08lx", m.usButtonFlags, data, flags);
     };
@@ -282,7 +277,6 @@ void handle_raw_input(HRAWINPUT hraw)
       in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
     }
     in.ki.wVk = k.VKey;
-    in.ki.dwExtraInfo = kDeskflowExtraInfo;
     inputs.push_back(in);
     LOG_DEBUG(
         "raw key vkey=0x%02x scan=0x%02x flags=0x%04x -> dwFlags=0x%08lx", k.VKey, k.MakeCode, k.Flags, in.ki.dwFlags
@@ -327,6 +321,8 @@ MSWindowsDesks::MSWindowsDesks(
       m_updateKeys(updateKeys),
       m_events(events)
 {
+  // Only reinject raw input on secondary desks (clients)
+  g_captureRawInput = !m_isPrimary;
 
   m_cursor = createBlankCursor();
   m_deskClass = createDeskWindowClass(m_isPrimary);
