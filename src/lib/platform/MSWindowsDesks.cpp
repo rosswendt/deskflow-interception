@@ -23,7 +23,6 @@
 #include <cstdint>
 #include <malloc.h>
 #include <string>
-#include <vector>
 
 #if defined(_WIN32)
 #include <hidusage.h>
@@ -75,8 +74,6 @@
 #define DESKFLOW_MSG_FAKE_REL_MOVE DESKFLOW_HOOK_LAST_MSG + 11
 // enable; <unused>
 #define DESKFLOW_MSG_FAKE_INPUT DESKFLOW_HOOK_LAST_MSG + 12
-// KeyChordMsg*; <unused>
-#define DESKFLOW_MSG_FAKE_CHORD DESKFLOW_HOOK_LAST_MSG + 13
 
 static bool send_keyboard_input(WORD wVk, WORD wScan, DWORD dwFlags)
 {
@@ -113,12 +110,6 @@ static void send_mouse_input(DWORD dwFlags, DWORD dx, DWORD dy, DWORD dwData)
 #if defined(_WIN32)
 namespace {
 
-struct KeyChordMsg
-{
-  WORD vk;
-  std::vector<WORD> mods;
-};
-
 HKL get_foreground_layout()
 {
   HWND hwnd = GetForegroundWindow();
@@ -154,66 +145,6 @@ bool send_scancode_key(WORD vk, bool keyUp)
   }
 
   return send_keyboard_input(0, static_cast<WORD>(sc & 0xFFu), flags);
-}
-
-void send_key_chord(WORD vk, const std::vector<WORD> &mods)
-{
-  std::vector<INPUT> seq;
-  std::vector<WORD> pressedMods;
-  HKL layout = get_foreground_layout();
-
-  for (WORD mod : mods) {
-    if ((GetKeyState(mod) & 0x8000) == 0) {
-      UINT sc = MapVirtualKeyExW(mod, MAPVK_VK_TO_VSC, layout);
-      UINT scEx = MapVirtualKeyExW(mod, MAPVK_VK_TO_VSC_EX, layout);
-      INPUT in{};
-      in.type = INPUT_KEYBOARD;
-      in.ki.wScan = sc & 0xFFu;
-      in.ki.dwFlags = KEYEVENTF_SCANCODE;
-      if ((scEx & 0x100u) != 0) {
-        in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
-      }
-      seq.push_back(in);
-      pressedMods.push_back(mod);
-    }
-  }
-
-  {
-    UINT sc = MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC, layout);
-    UINT scEx = MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC_EX, layout);
-    INPUT in{};
-    in.type = INPUT_KEYBOARD;
-    if (sc != 0) {
-      in.ki.wScan = sc & 0xFFu;
-      in.ki.dwFlags = KEYEVENTF_SCANCODE;
-      if ((scEx & 0x100u) != 0) {
-        in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
-      }
-    } else {
-      in.ki.wVk = vk;
-    }
-    seq.push_back(in);
-    INPUT up = in;
-    up.ki.dwFlags |= KEYEVENTF_KEYUP;
-    seq.push_back(up);
-  }
-
-  for (auto it = pressedMods.rbegin(); it != pressedMods.rend(); ++it) {
-    UINT sc = MapVirtualKeyExW(*it, MAPVK_VK_TO_VSC, layout);
-    UINT scEx = MapVirtualKeyExW(*it, MAPVK_VK_TO_VSC_EX, layout);
-    INPUT in{};
-    in.type = INPUT_KEYBOARD;
-    in.ki.wScan = sc & 0xFFu;
-    in.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
-    if ((scEx & 0x100u) != 0) {
-      in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
-    }
-    seq.push_back(in);
-  }
-
-  if (!seq.empty()) {
-    SendInput(static_cast<UINT>(seq.size()), seq.data(), sizeof(INPUT));
-  }
 }
 
 enum class MouseInjectionPath
@@ -500,12 +431,6 @@ void MSWindowsDesks::getCursorPos(int32_t &x, int32_t &y) const
 void MSWindowsDesks::fakeKeyEvent(WORD virtualKey, WORD scanCode, DWORD flags, bool /*isAutoRepeat*/) const
 {
   sendMessage(DESKFLOW_MSG_FAKE_KEY, flags, MAKELPARAM(scanCode, virtualKey));
-}
-
-void MSWindowsDesks::fakeKeyChord(WORD virtualKey, const std::vector<WORD> &modifiers) const
-{
-  auto *msg = new KeyChordMsg{virtualKey, modifiers};
-  sendMessage(DESKFLOW_MSG_FAKE_CHORD, reinterpret_cast<WPARAM>(msg), 0);
 }
 
 void MSWindowsDesks::fakeMouseButton(ButtonID button, bool press)
@@ -942,13 +867,6 @@ void MSWindowsDesks::deskThread(void *vdesk)
       // Note, this is intended to be HI/LOWORD and not HI/LOBYTE
       sendKeyInterception(HIWORD(msg.lParam), LOWORD(msg.lParam), (DWORD)msg.wParam);
       break;
-
-    case DESKFLOW_MSG_FAKE_CHORD: {
-      auto *chord = reinterpret_cast<KeyChordMsg *>(msg.wParam);
-      send_key_chord(chord->vk, chord->mods);
-      delete chord;
-      break;
-    }
 
     case DESKFLOW_MSG_FAKE_BUTTON:
       if (msg.wParam != 0) {
