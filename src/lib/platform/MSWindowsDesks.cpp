@@ -245,11 +245,13 @@ void handle_raw_input(HRAWINPUT hraw)
 {
   UINT size = 0;
   if (GetRawInputData(hraw, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER)) != 0) {
+    LOG_WARN("GetRawInputData size query failed, err=%lu", GetLastError());
     return;
   }
 
   std::vector<uint8_t> data(size);
   if (GetRawInputData(hraw, RID_INPUT, data.data(), &size, sizeof(RAWINPUTHEADER)) != size) {
+    LOG_WARN("GetRawInputData data retrieval failed, err=%lu", GetLastError());
     return;
   }
 
