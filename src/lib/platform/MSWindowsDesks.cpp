@@ -75,6 +75,8 @@
 // enable; <unused>
 #define DESKFLOW_MSG_FAKE_INPUT DESKFLOW_HOOK_LAST_MSG + 12
 
+constexpr ULONG_PTR kDeskflowExtraInfo = 0x44F157C3;
+
 static bool send_keyboard_input(WORD wVk, WORD wScan, DWORD dwFlags)
 {
   INPUT inp;
@@ -83,7 +85,7 @@ static bool send_keyboard_input(WORD wVk, WORD wScan, DWORD dwFlags)
   inp.ki.wScan = wScan;
   inp.ki.dwFlags = dwFlags & 0xF;
   inp.ki.time = 0;
-  inp.ki.dwExtraInfo = 0;
+  inp.ki.dwExtraInfo = kDeskflowExtraInfo;
   UINT sent = SendInput(1, &inp, sizeof(inp));
   if (sent == 0) {
     LOG_WARN(
@@ -103,7 +105,7 @@ static void send_mouse_input(DWORD dwFlags, DWORD dx, DWORD dy, DWORD dwData)
   inp.mi.dy = dy;
   inp.mi.mouseData = dwData;
   inp.mi.time = 0;
-  inp.mi.dwExtraInfo = 0;
+  inp.mi.dwExtraInfo = kDeskflowExtraInfo;
   SendInput(1, &inp, sizeof(inp));
 }
 
@@ -194,6 +196,16 @@ void handle_raw_input(HRAWINPUT hraw)
     return;
   }
 
+  if (raw->header.dwType == RIM_TYPEMOUSE) {
+    if (raw->data.mouse.ulExtraInformation == kDeskflowExtraInfo) {
+      return;
+    }
+  } else if (raw->header.dwType == RIM_TYPEKEYBOARD) {
+    if (raw->data.keyboard.ExtraInformation == kDeskflowExtraInfo) {
+      return;
+    }
+  }
+
   std::vector<INPUT> inputs;
 
   if (raw->header.dwType == RIM_TYPEMOUSE) {
@@ -205,6 +217,7 @@ void handle_raw_input(HRAWINPUT hraw)
       in.mi.dx = m.lLastX;
       in.mi.dy = m.lLastY;
       in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE;
+      in.mi.dwExtraInfo = kDeskflowExtraInfo;
       inputs.push_back(in);
       LOG_DEBUG("raw mouse move %ld,%ld -> MOVE", m.lLastX, m.lLastY);
     }
@@ -214,6 +227,7 @@ void handle_raw_input(HRAWINPUT hraw)
       in.type = INPUT_MOUSE;
       in.mi.dwFlags = flags;
       in.mi.mouseData = data;
+      in.mi.dwExtraInfo = kDeskflowExtraInfo;
       inputs.push_back(in);
       LOG_DEBUG("raw mouse button 0x%04x data=%lu -> flags=0x%08lx", m.usButtonFlags, data, flags);
     };
@@ -268,6 +282,7 @@ void handle_raw_input(HRAWINPUT hraw)
       in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
     }
     in.ki.wVk = k.VKey;
+    in.ki.dwExtraInfo = kDeskflowExtraInfo;
     inputs.push_back(in);
     LOG_DEBUG(
         "raw key vkey=0x%02x scan=0x%02x flags=0x%04x -> dwFlags=0x%08lx", k.VKey, k.MakeCode, k.Flags, in.ki.dwFlags
@@ -570,11 +585,11 @@ HWND MSWindowsDesks::createWindow(ATOM windowClass, const char *name) const
   RAWINPUTDEVICE devices[2] = {};
   devices[0].usUsagePage = HID_USAGE_PAGE_GENERIC;
   devices[0].usUsage = HID_USAGE_GENERIC_MOUSE;
-  devices[0].dwFlags = RIDEV_INPUTSINK;
+  devices[0].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;
   devices[0].hwndTarget = window;
   devices[1].usUsagePage = HID_USAGE_PAGE_GENERIC;
   devices[1].usUsage = HID_USAGE_GENERIC_KEYBOARD;
-  devices[1].dwFlags = RIDEV_INPUTSINK;
+  devices[1].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;
   devices[1].hwndTarget = window;
   if (RegisterRawInputDevices(devices, 2, sizeof(RAWINPUTDEVICE)) == FALSE) {
     LOG_WARN("RegisterRawInputDevices failed: %lu", GetLastError());
