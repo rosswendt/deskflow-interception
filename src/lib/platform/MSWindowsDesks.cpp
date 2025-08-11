@@ -20,9 +20,14 @@
 #include "platform/MSWindowsHook.h"
 #include "platform/MSWindowsScreen.h"
 
+#include <cstdint>
 #include <malloc.h>
 #include <string>
 #include <vector>
+
+#if defined(_WIN32)
+#include <hidusage.h>
+#endif
 
 #if !defined(SPI_GETSCREENSAVERRUNNING)
 #define SPI_GETSCREENSAVERRUNNING 114
@@ -233,6 +238,105 @@ void sendMouseRelativeInterception(int dx, int dy)
   if (g_injectionPath != MouseInjectionPath::SendInput) {
     LOG_INFO("using SendInput for mouse injection");
     g_injectionPath = MouseInjectionPath::SendInput;
+  }
+}
+
+void handle_raw_input(HRAWINPUT hraw)
+{
+  UINT size = 0;
+  if (GetRawInputData(hraw, RID_INPUT, nullptr, &size, sizeof(RAWINPUTHEADER)) != 0) {
+    return;
+  }
+
+  std::vector<uint8_t> data(size);
+  if (GetRawInputData(hraw, RID_INPUT, data.data(), &size, sizeof(RAWINPUTHEADER)) != size) {
+    return;
+  }
+
+  RAWINPUT *raw = reinterpret_cast<RAWINPUT *>(data.data());
+  std::vector<INPUT> inputs;
+
+  if (raw->header.dwType == RIM_TYPEMOUSE) {
+    const RAWMOUSE &m = raw->data.mouse;
+
+    if ((m.usFlags & MOUSE_MOVE_ABSOLUTE) == 0 && (m.lLastX != 0 || m.lLastY != 0)) {
+      INPUT in{};
+      in.type = INPUT_MOUSE;
+      in.mi.dx = m.lLastX;
+      in.mi.dy = m.lLastY;
+      in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE;
+      inputs.push_back(in);
+      LOG_DEBUG("raw mouse move %ld,%ld -> MOVE", m.lLastX, m.lLastY);
+    }
+
+    auto add_button = [&inputs, &m](DWORD flags, DWORD data) {
+      INPUT in{};
+      in.type = INPUT_MOUSE;
+      in.mi.dwFlags = flags;
+      in.mi.mouseData = data;
+      inputs.push_back(in);
+      LOG_DEBUG("raw mouse button 0x%04x data=%lu -> flags=0x%08lx", m.usButtonFlags, data, flags);
+    };
+
+    USHORT bf = m.usButtonFlags;
+    if ((bf & RI_MOUSE_LEFT_BUTTON_DOWN) != 0) {
+      add_button(MOUSEEVENTF_LEFTDOWN, 0);
+    }
+    if ((bf & RI_MOUSE_LEFT_BUTTON_UP) != 0) {
+      add_button(MOUSEEVENTF_LEFTUP, 0);
+    }
+    if ((bf & RI_MOUSE_RIGHT_BUTTON_DOWN) != 0) {
+      add_button(MOUSEEVENTF_RIGHTDOWN, 0);
+    }
+    if ((bf & RI_MOUSE_RIGHT_BUTTON_UP) != 0) {
+      add_button(MOUSEEVENTF_RIGHTUP, 0);
+    }
+    if ((bf & RI_MOUSE_MIDDLE_BUTTON_DOWN) != 0) {
+      add_button(MOUSEEVENTF_MIDDLEDOWN, 0);
+    }
+    if ((bf & RI_MOUSE_MIDDLE_BUTTON_UP) != 0) {
+      add_button(MOUSEEVENTF_MIDDLEUP, 0);
+    }
+    if ((bf & RI_MOUSE_BUTTON_4_DOWN) != 0) {
+      add_button(MOUSEEVENTF_XDOWN, XBUTTON1);
+    }
+    if ((bf & RI_MOUSE_BUTTON_4_UP) != 0) {
+      add_button(MOUSEEVENTF_XUP, XBUTTON1);
+    }
+    if ((bf & RI_MOUSE_BUTTON_5_DOWN) != 0) {
+      add_button(MOUSEEVENTF_XDOWN, XBUTTON2);
+    }
+    if ((bf & RI_MOUSE_BUTTON_5_UP) != 0) {
+      add_button(MOUSEEVENTF_XUP, XBUTTON2);
+    }
+    if ((bf & RI_MOUSE_WHEEL) != 0) {
+      add_button(MOUSEEVENTF_WHEEL, static_cast<DWORD>(static_cast<SHORT>(m.usButtonData)));
+    }
+    if ((bf & RI_MOUSE_HWHEEL) != 0) {
+      add_button(MOUSEEVENTF_HWHEEL, static_cast<DWORD>(static_cast<SHORT>(m.usButtonData)));
+    }
+  } else if (raw->header.dwType == RIM_TYPEKEYBOARD) {
+    const RAWKEYBOARD &k = raw->data.keyboard;
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wScan = k.MakeCode;
+    in.ki.dwFlags = KEYEVENTF_SCANCODE;
+    if ((k.Flags & RI_KEY_BREAK) != 0) {
+      in.ki.dwFlags |= KEYEVENTF_KEYUP;
+    }
+    if ((k.Flags & RI_KEY_E0) != 0) {
+      in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+    }
+    in.ki.wVk = k.VKey;
+    inputs.push_back(in);
+    LOG_DEBUG(
+        "raw key vkey=0x%02x scan=0x%02x flags=0x%04x -> dwFlags=0x%08lx", k.VKey, k.MakeCode, k.Flags, in.ki.dwFlags
+    );
+  }
+
+  if (!inputs.empty()) {
+    SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+    LOG_DEBUG("SendInput count=%zu", inputs.size());
   }
 }
 
@@ -528,6 +632,19 @@ HWND MSWindowsDesks::createWindow(ATOM windowClass, const char *name) const
     LOG((CLOG_ERR "failed to create window: %d", GetLastError()));
     throw XScreenOpenFailure();
   }
+
+  RAWINPUTDEVICE devices[2] = {};
+  devices[0].usUsagePage = HID_USAGE_PAGE_GENERIC;
+  devices[0].usUsage = HID_USAGE_GENERIC_MOUSE;
+  devices[0].dwFlags = RIDEV_INPUTSINK;
+  devices[0].hwndTarget = window;
+  devices[1].usUsagePage = HID_USAGE_PAGE_GENERIC;
+  devices[1].usUsage = HID_USAGE_GENERIC_KEYBOARD;
+  devices[1].dwFlags = RIDEV_INPUTSINK;
+  devices[1].hwndTarget = window;
+  if (RegisterRawInputDevices(devices, 2, sizeof(RAWINPUTDEVICE)) == FALSE) {
+    LOG_WARN("RegisterRawInputDevices failed: %lu", GetLastError());
+  }
   return window;
 }
 
@@ -540,6 +657,9 @@ void MSWindowsDesks::destroyWindow(HWND hwnd) const
 
 LRESULT CALLBACK MSWindowsDesks::primaryDeskProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+  if (msg == WM_INPUT) {
+    handle_raw_input(reinterpret_cast<HRAWINPUT>(lParam));
+  }
   return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
@@ -553,6 +673,9 @@ LRESULT CALLBACK MSWindowsDesks::secondaryDeskProc(HWND hwnd, UINT msg, WPARAM w
     if (LOWORD(lParam) != 0 || HIWORD(lParam) != 0) {
       hide = true;
     }
+    break;
+  case WM_INPUT:
+    handle_raw_input(reinterpret_cast<HRAWINPUT>(lParam));
     break;
   }
 
