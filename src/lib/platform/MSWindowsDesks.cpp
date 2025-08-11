@@ -570,11 +570,11 @@ HWND MSWindowsDesks::createWindow(ATOM windowClass, const char *name) const
   RAWINPUTDEVICE devices[2] = {};
   devices[0].usUsagePage = HID_USAGE_PAGE_GENERIC;
   devices[0].usUsage = HID_USAGE_GENERIC_MOUSE;
-  devices[0].dwFlags = RIDEV_INPUTSINK;
+  devices[0].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;
   devices[0].hwndTarget = window;
   devices[1].usUsagePage = HID_USAGE_PAGE_GENERIC;
   devices[1].usUsage = HID_USAGE_GENERIC_KEYBOARD;
-  devices[1].dwFlags = RIDEV_INPUTSINK;
+  devices[1].dwFlags = RIDEV_INPUTSINK | RIDEV_NOLEGACY;
   devices[1].hwndTarget = window;
   if (RegisterRawInputDevices(devices, 2, sizeof(RAWINPUTDEVICE)) == FALSE) {
     LOG_WARN("RegisterRawInputDevices failed: %lu", GetLastError());
